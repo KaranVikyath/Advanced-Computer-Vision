@@ -59,8 +59,28 @@ class CustomConv2DFunction(Function):
         # Fill in the code here
         #################################################################################
 
+        #Unfold function with appropriate parameters sent.
+        unfold_input=unfold(input_feats,kernel_size=(kernel_size,kernel_size),padding=padding,stride=stride)
+
+        #We now convert the weight into a tensor of dimension [batch_size,channel x height x width]
+        unfold_weight = weight.view(weight.size(0), -1)
+        # Now we multiply the unfolded input and weights after making sure the dimensions are matched by transpose.
+        unfold_out=(unfold_input.transpose(1,2)@unfold_weight.T).transpose(1,2)
+        # Now we unwrap the bias by expanding it according to batch_size of output and unsqueeze to insert a 1 dimension and then unfold to match ouput size.
+        unfold_bias=bias.expand(unfold_out.size()[:2]).unsqueeze(2).expand(unfold_out.size())
+        unfold_out+=unfold_bias
+
+        # From the formula given we calculate the output dimensions
+        out_dim1 = ((ctx.input_height + 2 * ctx.padding - kernel_size)//stride)+1
+        out_dim2 = ((ctx.input_width + 2 * ctx.padding - kernel_size)//stride)+1
+
+        # Fold our output to the above calculated dimension
+        output = fold(unfold_out, output_size=(out_dim1, out_dim2), kernel_size=(1,1), stride=1)
+
         # save for backward (you need to save the unfolded tensor into ctx)
         # ctx.save_for_backward(your_vars, weight, bias)
+        ctx.save_for_backward(unfold_input,unfold_weight, weight, bias)
+
 
         return output
 
@@ -81,7 +101,7 @@ class CustomConv2DFunction(Function):
         # unpack tensors and initialize the grads
         # your_vars, weight, bias = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None
-
+        unfold_input,unfold_weight,weight,bias=ctx.saved_tensors
         # recover the conv params
         kernel_size = weight.size(2)
         stride = ctx.stride
@@ -93,6 +113,21 @@ class CustomConv2DFunction(Function):
         # Fill in the code here
         #################################################################################
         # compute the gradients w.r.t. input and params
+        # Unfold the grad output
+        unfold_grad_op=unfold(grad_output,kernel_size=(1,1),stride=1)
+
+        # Gradient of input is multiplication of output gradient with weight transposed to match size
+        unfold_grad_input=(unfold_grad_op.transpose(1,2)@unfold_weight).transpose(1,2)
+
+        # Fold the obtained input based on input dimensions
+        grad_input= fold(unfold_grad_input,output_size=(input_height,input_width),kernel_size=(kernel_size,kernel_size),padding=padding,stride=stride)
+
+        # Calculate weight gradient , multiplying the real input with the gradient output
+        unfold_grad_weight=(unfold_input@(unfold_grad_op.transpose(1,2))).transpose(1,2)
+
+        # Sum the two batches , and reshape into a 4D tensor of [batch,channel,kernelsize,ksize]
+        grad_weight = unfold_grad_weight.sum((0)).view(unfold_grad_weight.size(1),-1,kernel_size,kernel_size)
+        
 
         if bias is not None and ctx.needs_input_grad[2]:
             # compute the gradients w.r.t. bias (if any)
