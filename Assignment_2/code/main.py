@@ -37,6 +37,9 @@ from student_code import (
     default_vit_model,
     get_train_transforms,
     get_val_transforms,
+    #######################################################################################
+    custom_vit_model
+    #######################################################################################
 )
 
 # part III
@@ -129,6 +132,11 @@ parser.add_argument(
 parser.add_argument(
     "--use-vit", action="store_true", help="Use vision Transformer"
 )
+#######################################################################################
+parser.add_argument(
+    "--use-customvit", action="store_true", help="Use Custom Designed Model"
+)
+#######################################################################################
 parser.add_argument(
     "--use-resnet18", action="store_true", help="Use pretrained resnet18 model"
 )
@@ -164,6 +172,10 @@ def main(args):
         model.fc = nn.Linear(512, 100)
     elif args.use_vit:
         model = default_vit_model(num_classes=100)
+    #######################################################################################
+    elif args.use_customvit:
+        model = custom_vit_model(num_classes=100)
+    #######################################################################################
     else:
         model = default_cnn_model(num_classes=100)
     model_arch = "simplenet"
@@ -214,7 +226,7 @@ def main(args):
             return
 
     else:
-        log_folder = "exp_" + str(datetime.datetime.fromtimestamp(int(time.time())))
+        log_folder = "exp_" + datetime.datetime.fromtimestamp(int(time.time())).strftime("%Y-%m-%d_%H-%M-%S") #change to log path
 
     # tensorboard writer
     log_folder = os.path.join("../logs", log_folder)
@@ -383,7 +395,7 @@ def train(train_loader, model, criterion, optimizer, scheduler, epoch, args, wri
             target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output = model(input)
+        output= model(input)
         loss = criterion(output, target)
 
         # measure accuracy and record loss

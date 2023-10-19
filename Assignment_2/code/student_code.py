@@ -59,8 +59,28 @@ class CustomConv2DFunction(Function):
         # Fill in the code here
         #################################################################################
 
+        #Unfold function with appropriate parameters sent.
+        unfold_input=unfold(input_feats,kernel_size=(kernel_size,kernel_size),padding=padding,stride=stride)
+
+        #We now convert the weight into a tensor of dimension [batch_size,channel x height x width]
+        unfold_weight = weight.view(weight.size(0), -1)
+        # Now we multiply the unfolded input and weights after making sure the dimensions are matched by transpose.
+        unfold_out=(unfold_input.transpose(1,2)@unfold_weight.T).transpose(1,2)
+        # Now we unwrap the bias by expanding it according to batch_size of output and unsqueeze to insert a 1 dimension and then unfold to match ouput size.
+        unfold_bias=bias.expand(unfold_out.size()[:2]).unsqueeze(2).expand(unfold_out.size())
+        unfold_out+=unfold_bias
+
+        # From the formula given we calculate the output dimensions
+        out_dim1 = ((ctx.input_height + 2 * ctx.padding - kernel_size)//stride)+1
+        out_dim2 = ((ctx.input_width + 2 * ctx.padding - kernel_size)//stride)+1
+
+        # Fold our output to the above calculated dimension
+        output = fold(unfold_out, output_size=(out_dim1, out_dim2), kernel_size=(1,1), stride=1)
+
         # save for backward (you need to save the unfolded tensor into ctx)
         # ctx.save_for_backward(your_vars, weight, bias)
+        ctx.save_for_backward(unfold_input,unfold_weight, weight, bias)
+
 
         return output
 
@@ -81,7 +101,7 @@ class CustomConv2DFunction(Function):
         # unpack tensors and initialize the grads
         # your_vars, weight, bias = ctx.saved_tensors
         grad_input = grad_weight = grad_bias = None
-
+        unfold_input,unfold_weight,weight,bias=ctx.saved_tensors
         # recover the conv params
         kernel_size = weight.size(2)
         stride = ctx.stride
@@ -93,6 +113,21 @@ class CustomConv2DFunction(Function):
         # Fill in the code here
         #################################################################################
         # compute the gradients w.r.t. input and params
+        # Unfold the grad output
+        unfold_grad_op=unfold(grad_output,kernel_size=(1,1),stride=1)
+
+        # Gradient of input is multiplication of output gradient with weight transposed to match size
+        unfold_grad_input=(unfold_grad_op.transpose(1,2)@unfold_weight).transpose(1,2)
+
+        # Fold the obtained input based on input dimensions
+        grad_input= fold(unfold_grad_input,output_size=(input_height,input_width),kernel_size=(kernel_size,kernel_size),padding=padding,stride=stride)
+
+        # Calculate weight gradient , multiplying the real input with the gradient output
+        unfold_grad_weight=(unfold_input@(unfold_grad_op.transpose(1,2))).transpose(1,2)
+
+        # Sum the two batches , and reshape into a 4D tensor of [batch,channel,kernelsize,ksize]
+        grad_weight = unfold_grad_weight.sum((0)).view(unfold_grad_weight.size(1),-1,kernel_size,kernel_size)
+        
 
         if bias is not None and ctx.needs_input_grad[2]:
             # compute the gradients w.r.t. bias (if any)
@@ -289,7 +324,23 @@ class SimpleViT(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
 
         ########################################################################
-        # Fill in the code here
+        self.embedding = PatchEmbed(kernel_size=(patch_size,patch_size),
+                                      stride=(patch_size,patch_size),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim)
+
+        self.transformer = nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, embed_dim))
+        
+        self.mlp_head  = nn.Linear(embed_dim, num_classes)
         ########################################################################
         # the implementation shall start from embedding patches,
         # followed by some transformer blocks
@@ -311,14 +362,178 @@ class SimpleViT(nn.Module):
 
     def forward(self, x):
         ########################################################################
-        # Fill in the code here
+        x = self.embedding(x)
+        if self.pos_embed is not None:
+            pos_embed = self.pos_embed.expand(x.size())
+            x = x+pos_embed
+        for block in self.transformer:
+            x = block(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0),-1)
+        x = self.mlp_head(x)
         ########################################################################
         return x
 
+class CustomViT(nn.Module):
+    """
+    This module implements A Custom Inception Style Vision Transformer
+    """
+
+    def __init__(
+        self,
+        img_size=128,
+        num_classes=100,
+        patch_size=16,
+        in_chans=3,
+        embed_dim=192,
+        depth=6, #changed depth
+        num_heads=4,
+        mlp_ratio=4.0,
+        qkv_bias=True,
+        drop_path_rate=0.1,
+        norm_layer=nn.LayerNorm,
+        act_layer=nn.GELU,
+        use_abs_pos=True,
+        window_size=4,
+        window_block_indexes=(1, 3),
+    ):
+        """
+        Args:
+            img_size (int): Input image size.
+            num_classes (int): Number of object categories
+            patch_size (int): Patch size.
+            in_chans (int): Number of input image channels.
+            embed_dim (int): Patch embedding dimension.
+            depth (int): Depth of ViT.
+            num_heads (int): Number of attention heads in each ViT block.
+            mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
+            qkv_bias (bool): If True, add a learnable bias to query, key, value.
+            drop_path_rate (float): Stochastic depth rate.
+            norm_layer (nn.Module): Normalization layer.
+            act_layer (nn.Module): Activation layer.
+            use_abs_pos (bool): If True, use absolute positional embeddings.
+            window_size (int): Window size for window attention blocks.
+            window_block_indexes (list): Indexes for blocks using window attention.
+            E.g., [0, 2] indicates the first and the third blocks will use window attention.
+
+        Feel free to modify the default parameters here.
+        """
+        super(CustomViT, self).__init__()
+
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed = nn.Parameter(
+                torch.zeros(
+                    1, img_size // patch_size, img_size // patch_size, embed_dim
+                )
+            )
+        else:
+            self.pos_embed = None
+        
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed_16 = nn.Parameter(
+                torch.zeros(
+                    1, img_size // (int(patch_size/2)), img_size // (int(patch_size/2)), embed_dim
+                )
+            )
+        else:
+            self.pos_embed_16 = None
+            
+        # stochastic depth decay rule
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
+
+        ########################################################################
+        # Fill in the code here
+        ########################################################################
+        # the implementation shall start from embedding patches,
+        # followed by some transformer blocks
+        self.embedding = PatchEmbed(kernel_size=(patch_size*2,patch_size*2),
+                                      stride=(patch_size,patch_size),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim) #[N,8,8,192]
+        
+        self.embedding_16 = PatchEmbed(kernel_size=(int(patch_size/2),int(patch_size/2)),
+                                      stride=(int(patch_size/2),int(patch_size/2)),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim) #16*16*192
+        
+        self.transformer_8 = nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+        
+        self.transformer_16 =  nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+
+        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, embed_dim))
+        self.mlp_head = nn.Linear(embed_dim*2, num_classes)
+
+        if self.pos_embed is not None:
+            trunc_normal_(self.pos_embed, std=0.02)
+
+        self.apply(self._init_weights)
+        # add any necessary weight initialization here
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        ########################################################################
+        copyx16 = torch.clone(x)
+
+        x = self.embedding(x)
+        if self.pos_embed is not None:
+            pos_embed = self.pos_embed.expand(x.size())
+            x = x+pos_embed
+        for block in self.transformer_8:
+            x = block(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0),-1)
+
+        
+        ##BLOCK2 
+        
+        x16 = self.embedding_16(copyx16)
+        if self.pos_embed_16 is not None:
+            pos_embed = self.pos_embed_16.expand(x16.size())
+            x16 = x16+pos_embed
+        for block in self.transformer_16:
+            x16 = block(x16)
+        x16 = self.avgpool(x16)
+        x16 = x16.view(x16.size(0),-1)
+
+        #Block stacking
+        x = torch.stack((x,x16),1)
+        x = torch.reshape(x, (x.size()[0], -1))
+        x = self.mlp_head(x)
+        ########################################################################
+        return x
 
 # change this to your model!
 default_cnn_model = SimpleNet
 default_vit_model = SimpleViT
+custom_vit_model = CustomViT
 
 # define data augmentation used for training, you can tweak things if you want
 def get_train_transforms(normalize):
