@@ -450,7 +450,7 @@ class CustomViT(nn.Module):
         ########################################################################
         # the implementation shall start from embedding patches,
         # followed by some transformer blocks
-        self.embedding = PatchEmbed(kernel_size=(patch_size*2,patch_size*2),
+        self.embedding = PatchEmbed(kernel_size=(patch_size,patch_size),
                                       stride=(patch_size,patch_size),
                                       in_chans=in_chans,
                                       embed_dim=embed_dim) #[N,8,8,192]
