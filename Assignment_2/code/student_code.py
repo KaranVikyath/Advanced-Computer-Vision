@@ -469,17 +469,6 @@ class CustomViT(nn.Module):
                                       in_chans=in_chans,
                                       embed_dim=embed_dim) #4*4*192
         
-        
-        transformer_seq = [TransformerBlock(dim=embed_dim,
-                                            num_heads=num_heads,
-                                            mlp_ratio=mlp_ratio,
-                                            qkv_bias=qkv_bias,
-                                            drop_path=drop_path_,
-                                            norm_layer=norm_layer,
-                                            act_layer=act_layer,
-                                            window_size=window_size if layer in window_block_indexes else 0) 
-                                            for layer, drop_path_ in enumerate(dpr)]
-        
         self.transformer_16 = nn.ModuleList([TransformerBlock(dim=embed_dim,
                                             num_heads=num_heads,
                                             mlp_ratio=mlp_ratio,
@@ -700,3 +689,4 @@ def vis_grad_attention(input, vis_alpha=2.0, n_rows=10, vis_output=None):
 
 
 default_visfunction = vis_grad_attention
+
