@@ -1,3 +1,4 @@
+
 # code modified from pytorch imagenet example
 
 # python imports
@@ -38,7 +39,7 @@ from student_code import (
     get_train_transforms,
     get_val_transforms,
     #######################################################################################
-    custom_vit_model
+    custommodel
     #######################################################################################
 )
 
@@ -134,7 +135,7 @@ parser.add_argument(
 )
 #######################################################################################
 parser.add_argument(
-    "--use-customvit", action="store_true", help="Use Custom Designed Model"
+    "--use-custommodel", action="store_true", help="Use Custom Designed Model"
 )
 #######################################################################################
 parser.add_argument(
@@ -173,8 +174,8 @@ def main(args):
     elif args.use_vit:
         model = default_vit_model(num_classes=100)
     #######################################################################################
-    elif args.use_customvit:
-        model = custom_vit_model(num_classes=100)
+    elif args.use_custommodel:
+        model = custommodel(num_classes=100)
     #######################################################################################
     else:
         model = default_cnn_model(num_classes=100)
@@ -186,7 +187,7 @@ def main(args):
         criterion = criterion.cuda(args.gpu)
 
     # setup the optimizer
-    if not args.use_vit:
+    if not (args.use_vit or args.use_custommodel):
         optimizer = torch.optim.SGD(
             model.parameters(),
             args.lr,
@@ -407,7 +408,7 @@ def train(train_loader, model, criterion, optimizer, scheduler, epoch, args, wri
         # compute gradient and do one SGD step
         loss.backward()
         # clip the grads to stablize training (for ViT)
-        if args.use_vit and (args.clip_grad > 0.0):
+        if (args.use_vit or args.use_custommodel) and (args.clip_grad > 0.0):
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 args.clip_grad
@@ -557,3 +558,4 @@ def accuracy(output, target, topk=(1,)):
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
+

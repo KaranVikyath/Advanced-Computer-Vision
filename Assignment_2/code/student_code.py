@@ -386,8 +386,8 @@ class CustomViT(nn.Module):
         patch_size=16,
         in_chans=3,
         embed_dim=192,
-        depth=6, #changed depth
-        num_heads=4,
+        depth=8,
+        num_heads=6,
         mlp_ratio=4.0,
         qkv_bias=True,
         drop_path_rate=0.1,
@@ -442,25 +442,34 @@ class CustomViT(nn.Module):
         else:
             self.pos_embed_16 = None
             
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed_4 = nn.Parameter(
+                torch.zeros(
+                    1, img_size // (int(patch_size*2)), img_size // (int(patch_size*2)), embed_dim
+                )
+            )
+        else:
+            self.pos_embed_4 = None
+
         # stochastic depth decay rule
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
 
         ########################################################################
-        # Fill in the code here
-        ########################################################################
-        # the implementation shall start from embedding patches,
-        # followed by some transformer blocks
-        self.embedding = PatchEmbed(kernel_size=(patch_size,patch_size),
-                                      stride=(patch_size,patch_size),
-                                      in_chans=in_chans,
-                                      embed_dim=embed_dim) #[N,8,8,192]
-        
+
         self.embedding_16 = PatchEmbed(kernel_size=(int(patch_size/2),int(patch_size/2)),
                                       stride=(int(patch_size/2),int(patch_size/2)),
                                       in_chans=in_chans,
                                       embed_dim=embed_dim) #16*16*192
         
-        self.transformer_8 = nn.ModuleList([TransformerBlock(dim=embed_dim,
+        
+        self.embedding_4 = PatchEmbed(kernel_size=(patch_size*2,patch_size*2),
+                                      stride=(patch_size*2,patch_size*2),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim) #4*4*192
+        
+        self.transformer_16 = nn.ModuleList([TransformerBlock(dim=embed_dim,
                                             num_heads=num_heads,
                                             mlp_ratio=mlp_ratio,
                                             qkv_bias=qkv_bias,
@@ -470,7 +479,7 @@ class CustomViT(nn.Module):
                                             window_size=window_size if layer in window_block_indexes else 0) 
                                             for layer, drop_path_ in enumerate(dpr)])
         
-        self.transformer_16 =  nn.ModuleList([TransformerBlock(dim=embed_dim,
+        self.transformer_4 = nn.ModuleList([TransformerBlock(dim=embed_dim,
                                             num_heads=num_heads,
                                             mlp_ratio=mlp_ratio,
                                             qkv_bias=qkv_bias,
@@ -482,7 +491,7 @@ class CustomViT(nn.Module):
 
         self.avgpool = nn.AdaptiveAvgPool3d((1, 1, embed_dim))
         self.mlp_head = nn.Linear(embed_dim*2, num_classes)
-
+        ########################################################################
         if self.pos_embed is not None:
             trunc_normal_(self.pos_embed, std=0.02)
 
@@ -500,20 +509,11 @@ class CustomViT(nn.Module):
 
     def forward(self, x):
         ########################################################################
+
         copyx16 = torch.clone(x)
-
-        x = self.embedding(x)
-        if self.pos_embed is not None:
-            pos_embed = self.pos_embed.expand(x.size())
-            x = x+pos_embed
-        for block in self.transformer_8:
-            x = block(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0),-1)
-
+        copyx4 = torch.clone(x)
         
-        ##BLOCK2 
-        
+        ##BLOCK1 
         x16 = self.embedding_16(copyx16)
         if self.pos_embed_16 is not None:
             pos_embed = self.pos_embed_16.expand(x16.size())
@@ -522,18 +522,27 @@ class CustomViT(nn.Module):
             x16 = block(x16)
         x16 = self.avgpool(x16)
         x16 = x16.view(x16.size(0),-1)
-
-        #Block stacking
-        x = torch.stack((x,x16),1)
+        
+        ##BLOCK2
+        x4 = self.embedding_4(copyx4)
+        if self.pos_embed_4 is not None:
+            pos_embed = self.pos_embed_4.expand(x4.size())
+            x4 = x4+pos_embed
+        for block in self.transformer_4:
+            x4 = block(x4)
+        x4 = self.avgpool(x4)
+        x4 = x4.view(x4.size(0),-1)
+        
+        x = torch.stack((x16,x4),1)
         x = torch.reshape(x, (x.size()[0], -1))
-        x = self.mlp_head(x)
+        x = self.mlp_headw(x)
         ########################################################################
         return x
 
 # change this to your model!
 default_cnn_model = SimpleNet
 default_vit_model = SimpleViT
-custom_vit_model = CustomViT
+custommodel = CustomViT
 
 # define data augmentation used for training, you can tweak things if you want
 def get_train_transforms(normalize):
@@ -680,3 +689,4 @@ def vis_grad_attention(input, vis_alpha=2.0, n_rows=10, vis_output=None):
 
 
 default_visfunction = vis_grad_attention
+
