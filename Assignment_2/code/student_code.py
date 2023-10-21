@@ -324,7 +324,23 @@ class SimpleViT(nn.Module):
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
 
         ########################################################################
-        # Fill in the code here
+        self.embedding = PatchEmbed(kernel_size=(patch_size,patch_size),
+                                      stride=(patch_size,patch_size),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim)
+
+        self.transformer = nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, embed_dim))
+        
+        self.mlp_head  = nn.Linear(embed_dim, num_classes)
         ########################################################################
         # the implementation shall start from embedding patches,
         # followed by some transformer blocks
@@ -346,14 +362,198 @@ class SimpleViT(nn.Module):
 
     def forward(self, x):
         ########################################################################
-        # Fill in the code here
+        x = self.embedding(x)
+        if self.pos_embed is not None:
+            pos_embed = self.pos_embed.expand(x.size())
+            x = x+pos_embed
+        for block in self.transformer:
+            x = block(x)
+        x = self.avgpool(x)
+        x = x.view(x.size(0),-1)
+        x = self.mlp_head(x)
         ########################################################################
         return x
 
+class CustomViT(nn.Module):
+    """
+    This module implements A Custom Inception Style Vision Transformer
+    """
+
+    def __init__(
+        self,
+        img_size=128,
+        num_classes=100,
+        patch_size=16,
+        in_chans=3,
+        embed_dim=192,
+        depth=8,
+        num_heads=6,
+        mlp_ratio=4.0,
+        qkv_bias=True,
+        drop_path_rate=0.1,
+        norm_layer=nn.LayerNorm,
+        act_layer=nn.GELU,
+        use_abs_pos=True,
+        window_size=4,
+        window_block_indexes=(1, 3),
+    ):
+        """
+        Args:
+            img_size (int): Input image size.
+            num_classes (int): Number of object categories
+            patch_size (int): Patch size.
+            in_chans (int): Number of input image channels.
+            embed_dim (int): Patch embedding dimension.
+            depth (int): Depth of ViT.
+            num_heads (int): Number of attention heads in each ViT block.
+            mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
+            qkv_bias (bool): If True, add a learnable bias to query, key, value.
+            drop_path_rate (float): Stochastic depth rate.
+            norm_layer (nn.Module): Normalization layer.
+            act_layer (nn.Module): Activation layer.
+            use_abs_pos (bool): If True, use absolute positional embeddings.
+            window_size (int): Window size for window attention blocks.
+            window_block_indexes (list): Indexes for blocks using window attention.
+            E.g., [0, 2] indicates the first and the third blocks will use window attention.
+
+        Feel free to modify the default parameters here.
+        """
+        super(CustomViT, self).__init__()
+
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed = nn.Parameter(
+                torch.zeros(
+                    1, img_size // patch_size, img_size // patch_size, embed_dim
+                )
+            )
+        else:
+            self.pos_embed = None
+        
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed_16 = nn.Parameter(
+                torch.zeros(
+                    1, img_size // (int(patch_size/2)), img_size // (int(patch_size/2)), embed_dim
+                )
+            )
+        else:
+            self.pos_embed_16 = None
+            
+        if use_abs_pos:
+            # Initialize absolute positional embedding with image size
+            # The embedding is learned from data
+            self.pos_embed_4 = nn.Parameter(
+                torch.zeros(
+                    1, img_size // (int(patch_size*2)), img_size // (int(patch_size*2)), embed_dim
+                )
+            )
+        else:
+            self.pos_embed_4 = None
+
+        # stochastic depth decay rule
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
+
+        ########################################################################
+
+        self.embedding_16 = PatchEmbed(kernel_size=(int(patch_size/2),int(patch_size/2)),
+                                      stride=(int(patch_size/2),int(patch_size/2)),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim) #16*16*192
+        
+        
+        self.embedding_4 = PatchEmbed(kernel_size=(patch_size*2,patch_size*2),
+                                      stride=(patch_size*2,patch_size*2),
+                                      in_chans=in_chans,
+                                      embed_dim=embed_dim) #4*4*192
+        
+        
+        transformer_seq = [TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)]
+        
+        self.transformer_16 = nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+        
+        self.transformer_4 = nn.ModuleList([TransformerBlock(dim=embed_dim,
+                                            num_heads=num_heads,
+                                            mlp_ratio=mlp_ratio,
+                                            qkv_bias=qkv_bias,
+                                            drop_path=drop_path_,
+                                            norm_layer=norm_layer,
+                                            act_layer=act_layer,
+                                            window_size=window_size if layer in window_block_indexes else 0) 
+                                            for layer, drop_path_ in enumerate(dpr)])
+
+        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, embed_dim))
+        self.mlp_head = nn.Linear(embed_dim*2, num_classes)
+        ########################################################################
+        if self.pos_embed is not None:
+            trunc_normal_(self.pos_embed, std=0.02)
+
+        self.apply(self._init_weights)
+        # add any necessary weight initialization here
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=0.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+
+    def forward(self, x):
+        ########################################################################
+
+        copyx16 = torch.clone(x)
+        copyx4 = torch.clone(x)
+        
+        ##BLOCK1 
+        x16 = self.embedding_16(copyx16)
+        if self.pos_embed_16 is not None:
+            pos_embed = self.pos_embed_16.expand(x16.size())
+            x16 = x16+pos_embed
+        for block in self.transformer_16:
+            x16 = block(x16)
+        x16 = self.avgpool(x16)
+        x16 = x16.view(x16.size(0),-1)
+        
+        ##BLOCK2
+        x4 = self.embedding_4(copyx4)
+        if self.pos_embed_4 is not None:
+            pos_embed = self.pos_embed_4.expand(x4.size())
+            x4 = x4+pos_embed
+        for block in self.transformer_4:
+            x4 = block(x4)
+        x4 = self.avgpool(x4)
+        x4 = x4.view(x4.size(0),-1)
+        
+        x = torch.stack((x16,x4),1)
+        x = torch.reshape(x, (x.size()[0], -1))
+        x = self.mlp_headw(x)
+        ########################################################################
+        return x
 
 # change this to your model!
 default_cnn_model = SimpleNet
 default_vit_model = SimpleViT
+custommodel = CustomViT
 
 # define data augmentation used for training, you can tweak things if you want
 def get_train_transforms(normalize):
