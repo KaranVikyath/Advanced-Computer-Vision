@@ -187,7 +187,9 @@ def main(args):
         criterion = criterion.cuda(args.gpu)
 
     # setup the optimizer
+    #######################################################################################
     if not (args.use_vit or args.use_custommodel):
+    #######################################################################################
         optimizer = torch.optim.SGD(
             model.parameters(),
             args.lr,
@@ -408,7 +410,9 @@ def train(train_loader, model, criterion, optimizer, scheduler, epoch, args, wri
         # compute gradient and do one SGD step
         loss.backward()
         # clip the grads to stablize training (for ViT)
+        ###############################################################################
         if (args.use_vit or args.use_custommodel) and (args.clip_grad > 0.0):
+        ###############################################################################
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(),
                 args.clip_grad
@@ -558,4 +562,3 @@ def accuracy(output, target, topk=(1,)):
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
-
