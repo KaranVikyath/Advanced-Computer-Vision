@@ -233,6 +233,7 @@ class SimpleNet(nn.Module):
             nn.ReLU(inplace=True),
         )
         # global avg pooling + FC
+        self.adversarial_attack = PGDAttack(nn.CrossEntropyLoss(), num_steps=5)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512, num_classes)
 
@@ -247,10 +248,10 @@ class SimpleNet(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
                 nn.init.constant_(m.bias, 0.0)
 
-    def forward(self, x):
+    def forward(self, x,adversarial_training=True):
         # you can implement adversarial training here
-        # if self.training:
-        #   # generate adversarial sample based on x
+        if self.training and adversarial_training:
+            x = self.adversarial_attack.perturb(self, x)
         x = self.features(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
@@ -574,7 +575,7 @@ def get_val_transforms(normalize):
 # Part III: Adversarial samples and Attention
 #################################################################################
 class PGDAttack(object):
-    def __init__(self, loss_fn, num_steps=10, step_size=0.01, epsilon=0.1):
+    def __init__(self, loss_fn=nn.CrossEntropyLoss(), num_steps=10, step_size=0.01, epsilon=0.1):
         """
         Attack a network by Project Gradient Descent. The attacker performs
         k steps of gradient descent of step size a, while always staying
@@ -611,33 +612,33 @@ class PGDAttack(object):
         input.requires_grad = False
 
         # loop over the number of steps
-        # for _ in range(self.num_steps):
         #################################################################################
         # Fill in the code here
         #################################################################################
-        
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad = False
+        for params in model.parameters():
+            params.requires_grad = False
 
         output.requires_grad = True
-        output.grad.zero_()
-
-        for _ in range(self.num_steps):
-            
+        if output.grad is not None:
             output.grad.zero_()
+        
+        for _ in range(self.num_steps):
+            output.requires_grad = True
+            if output.grad is not None:
+                output.grad.zero_()
 
-            
-            with torch.no_grad():
-                softmax_conf = model(output)
-
+            softmax_conf = model(output,adversarial_training=False)
             least_conf = softmax_conf.argmin(1)
-            least_conf_loss = self.loss_fn(softmax_conf, least_conf)
+
+            least_conf_loss = self.loss_fn(softmax_conf,least_conf)
             least_conf_loss.backward()
 
-            
-            output += self.step_size * output.grad.data.sign()
-            output = torch.clamp(output, min=input - self.epsilon, max=input + self.epsilon).detach()
+            adv_img = output + self.step_size*output.grad.data.sign()
+            output = torch.clamp(adv_img, min=input-self.epsilon, max=input+self.epsilon).detach()
+
+        input.requires_grad = False
+        for params in model.parameters():
+            params.requires_grad = True
 
         return output
 
