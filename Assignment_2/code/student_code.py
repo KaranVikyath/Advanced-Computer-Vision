@@ -636,7 +636,6 @@ class PGDAttack(object):
             adv_img = output + self.step_size*output.grad.data.sign()
             output = torch.clamp(adv_img, min=input-self.epsilon, max=input+self.epsilon).detach()
 
-        input.requires_grad = False
         for params in model.parameters():
             params.requires_grad = True
 
